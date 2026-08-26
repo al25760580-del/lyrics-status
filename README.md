@@ -49,6 +49,15 @@ Funciona de forma **100% autónoma en el dispositivo**, ejecutándose en segundo
    - Ajuste rápido de desfase milimétrico (*Offset* `+/- 100ms`) y compensación automática de latencia (*Auto-Offset*).
    - Barra de canciones demo para probar inmediatamente letras y traducción sin necesidad de abrir Spotify.
 
+7. **Plantillas de Estado de Discord (`DiscordStatusPusher`):**
+   - La línea activa se envía con `PATCH https://discord.com/api/v9/users/@me/settings` (campo `custom_status`), igual que el proyecto de referencia [aldair402/lyrics-status](https://github.com/aldair402/lyrics-status).
+   - Campos disponibles: `{lyrics}`, `{timestamp}`, `{song_name}`, `{song_author}`, `{song_album}`.
+   - Transformaciones con sintaxis `{campo:transformación}`: `uppercase`, `lowercase`, `cropped` (recorta a 40 caracteres con `...`) y `letters_only`. Se pueden combinar: `{lyrics:uppercase:letters_only}`.
+   - Placeholders legacy del proyecto de referencia mantenidos: `{lyrics_upper}`, `{song_name_cropped}`, `{song_author_lower}`, etc.
+   - Emoji unicode (`🎶`) o personalizado de Discord (`<:nombre:id>`, `<a:nombre:id>` animado) en el estado, con expiración automática de 60 s.
+   - *Auto-Offset* EWMA: media móvil exponencial (70/30) de la latencia real de cada PATCH para enviar la línea con anticipación y que aparezca justo a tiempo (`updateAutoOffset` / `autoOffsetMs`).
+   - Deduplicación por canción+línea y limpieza del estado (`custom_status = null`) al pausar/detener la reproducción.
+
 ---
 
 ## 📁 Estructura del Proyecto
