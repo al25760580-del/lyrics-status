@@ -3,17 +3,17 @@ package com.lyricsstatus.app.data.ai
 import android.content.Context
 import com.lyricsstatus.app.data.model.AiProvider
 import com.lyricsstatus.app.data.model.AppSettings
+import com.lyricsstatus.app.data.model.LyricsLine
 import com.lyricsstatus.app.data.model.SongLyrics
-import com.lyricsstatus.app.data.model.TranslationCacheEntry
+import com.lyricsstatus.app.data.parser.LrcParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.io.File
-import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -35,11 +35,21 @@ class TranslationManager(
     private val grokTranslator = GrokTranslator(client)
     private val customTranslator = CustomEndpointTranslator(client, json)
 
+    /**
+     * Persistent cache for translated lyrics. Each translation is stored as
+     * an LRC sidecar named after the original lyrics file plus the language:
+     *
+     *   `{FileNameOriginal}-{lang}.lrc`  (e.g. `Song-Artist-es-MX.lrc`)
+     *
+     * The base name matches the original raw/custom lyrics cache file
+     * (`{track}-{artist}.json` -> `{track}-{artist}-{lang}.lrc`), so a
+     * translated song is only ever requested to the AI once per language.
+     */
     private val cacheDir: File
-        get() = File(context.cacheDir, "lyrics_translations").apply { mkdirs() }
+        get() = File(context.filesDir, "lyrics_translations").apply { mkdirs() }
 
     /**
-     * Translates the whole song lyrics and populates [LyricsLine.textTranslated]
+     * Translates the whole song lyrics and populates [LyricsLine.textTranslated].
      */
     suspend fun translateSongLyrics(
         lyrics: SongLyrics,
@@ -56,10 +66,12 @@ class TranslationManager(
         }
 
         val targetLang = settings.targetLanguage.ifBlank { "es-MX" }
-        val fullLyricsText = lyrics.lines.joinToString("\n") { it.text }
+
+        val originalBase = buildOriginalBaseName(trackName, artistName)
+        val cacheKey = "${originalBase.lowercase(Locale.US)}_$targetLang"
+        val cacheFile = getLrcCacheFile(originalBase, targetLang)
 
         // 1. Check in-memory cache
-        val cacheKey = buildCacheKey(trackName, artistName, targetLang, settings)
         inMemoryCache[cacheKey]?.let { cachedLines ->
             if (cachedLines.size == lyrics.lines.size) {
                 applyTranslations(lyrics, cachedLines)
@@ -67,29 +79,29 @@ class TranslationManager(
             }
         }
 
-        // 2. Check disk cache
-        val diskFile = getDiskCacheFile(trackName, artistName, targetLang)
-        if (diskFile.exists()) {
-            try {
-                val entry = json.decodeFromString<TranslationCacheEntry>(diskFile.readText())
-                if (entry.lines.size == lyrics.lines.size) {
-                    inMemoryCache[cacheKey] = entry.lines
-                    applyTranslations(lyrics, entry.lines)
-                    return@withContext Result.success(lyrics)
-                }
-            } catch (ignored: Exception) { }
+        // 2. Check LRC sidecar cache ({FileNameOriginal}-{lang}.lrc)
+        readCachedTranslations(cacheFile, lyrics)?.let { cachedLines ->
+            inMemoryCache[cacheKey] = cachedLines
+            applyTranslations(lyrics, cachedLines)
+            return@withContext Result.success(lyrics)
         }
 
         // 3. Perform fresh AI call with mutex
         mutex.withLock {
-            // Double check cache in mutex
+            // Double check both caches inside the mutex
             inMemoryCache[cacheKey]?.let { cachedLines ->
                 if (cachedLines.size == lyrics.lines.size) {
                     applyTranslations(lyrics, cachedLines)
                     return@withContext Result.success(lyrics)
                 }
             }
+            readCachedTranslations(cacheFile, lyrics)?.let { cachedLines ->
+                inMemoryCache[cacheKey] = cachedLines
+                applyTranslations(lyrics, cachedLines)
+                return@withContext Result.success(lyrics)
+            }
 
+            val fullLyricsText = lyrics.lines.joinToString("\n") { it.text }
             val translator = when (settings.aiProvider) {
                 AiProvider.CHATGPT -> openAiTranslator
                 AiProvider.GEMINI -> geminiTranslator
@@ -109,15 +121,11 @@ class TranslationManager(
                     inMemoryCache[cacheKey] = translatedLines
                     applyTranslations(lyrics, translatedLines)
 
-                    // Persist to disk cache
+                    // Persist as {FileNameOriginal}-{lang}.lrc sidecar
                     try {
-                        val entry = TranslationCacheEntry(
-                            language = targetLang,
-                            provider = settings.aiProvider.name,
-                            model = if (settings.aiProvider == AiProvider.CUSTOM) settings.customModelName else settings.aiModel,
-                            lines = translatedLines
+                        cacheFile.writeText(
+                            buildTranslationLrc(lyrics, translatedLines, targetLang, settings)
                         )
-                        diskFile.writeText(json.encodeToString(entry))
                     } catch (ignored: Exception) { }
 
                     Result.success(lyrics)
@@ -129,27 +137,83 @@ class TranslationManager(
         }
     }
 
+    /**
+     * Reads the `{FileNameOriginal}-{lang}.lrc` sidecar and matches it back
+     * to the current lyrics: by line count first, then by exact timestamps.
+     */
+    private fun readCachedTranslations(file: File, lyrics: SongLyrics): List<String>? {
+        if (!file.exists()) return null
+        return try {
+            val cached = LrcParser.parse(file.readText())
+            when {
+                cached.lines.size == lyrics.lines.size -> cached.lines.map { it.text }
+                cached.lines.isNotEmpty() -> {
+                    val byTime = cached.lines.associateBy { it.time }
+                    val mapped = lyrics.lines.map { byTime[it.time]?.text }
+                    if (mapped.all { it != null }) mapped.map { it!! } else null
+                }
+                else -> null
+            }
+        } catch (ignored: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Serializes a translation as a standalone synchronized LRC file with
+     * `#` metadata headers (ignored by [LrcParser]).
+     */
+    private fun buildTranslationLrc(
+        lyrics: SongLyrics,
+        translated: List<String>,
+        lang: String,
+        settings: AppSettings
+    ): String {
+        val model = if (settings.aiProvider == AiProvider.CUSTOM) {
+            settings.customModelName
+        } else {
+            settings.aiModel
+        }
+        val sb = StringBuilder()
+        sb.append("# LyricsStatus translated lyrics cache\n")
+        sb.append("# lang=").append(lang).append('\n')
+        sb.append("# provider=").append(settings.aiProvider.name).append('\n')
+        sb.append("# model=").append(model).append('\n')
+        lyrics.lines.zip(translated).forEach { (line, text) ->
+            sb.append('[')
+                .append(formatLrcTimestamp(line.time))
+                .append(']')
+                .append(text.replace("\n", " "))
+                .append('\n')
+        }
+        return sb.toString()
+    }
+
+    /** `[mm:ss.cc]` (centiseconds, matching what [LrcParser] reads back). */
+    private fun formatLrcTimestamp(ms: Long): String {
+        val centis = ms / 10
+        return String.format(
+            Locale.US,
+            "%02d:%02d.%02d",
+            centis / 6000,
+            (centis % 6000) / 100,
+            centis % 100
+        )
+    }
+
+    /** `Song-Artist`: readable base matching the original lyrics cache file. */
+    private fun buildOriginalBaseName(track: String, artist: String): String {
+        val base = "${sanitize(track)}-${sanitize(artist)}".trim('-')
+        return base.ifBlank { "lyrics" }.take(80)
+    }
+
+    private fun getLrcCacheFile(base: String, lang: String): File =
+        File(cacheDir, "$base-$lang.lrc")
+
     private fun applyTranslations(lyrics: SongLyrics, translatedLines: List<String>) {
         lyrics.lines.zip(translatedLines).forEach { (line, translated) ->
             line.textTranslated = translated
         }
-    }
-
-    private fun buildCacheKey(
-        track: String,
-        artist: String,
-        lang: String,
-        settings: AppSettings
-    ): String {
-        val model = if (settings.aiProvider == AiProvider.CUSTOM) settings.customModelName else settings.aiModel
-        return "${settings.aiProvider.name}_${model}_${lang}_${track.lowercase()}_${artist.lowercase()}"
-    }
-
-    private fun getDiskCacheFile(track: String, artist: String, lang: String): File {
-        val sanitized = "${sanitize(track)}-${sanitize(artist)}-$lang"
-        val hash = sha256("$track\u0000$artist\u0000$lang")
-        val fileName = if (sanitized.length in 3..80) "$sanitized.json" else "$hash.json"
-        return File(cacheDir, fileName)
     }
 
     private fun sanitize(input: String): String {
@@ -157,11 +221,6 @@ class TranslationManager(
             .joinToString("")
             .trim('-')
             .take(40)
-    }
-
-    private fun sha256(input: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     fun clearCache() {

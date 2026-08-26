@@ -5,18 +5,17 @@ import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -35,6 +34,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,18 +45,23 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +70,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.lyricsstatus.app.data.discord.DiscordEmojiApi
+import com.lyricsstatus.app.data.discord.DiscordGuildEmojis
 import com.lyricsstatus.app.data.discord.DiscordStatusPusher
 import com.lyricsstatus.app.data.model.AppSettings
 import com.lyricsstatus.app.data.model.LyricLine
@@ -532,6 +539,7 @@ private fun DiscordStatusCustomizationSection(
 
     if (showEmojiPicker) {
         EmojiPickerDialog(
+            token = settings.discordToken,
             onPick = { emoji ->
                 onUpdate { s -> s.copy(discordCustomEmoji = emoji) }
                 showEmojiPicker = false
@@ -542,15 +550,39 @@ private fun DiscordStatusCustomizationSection(
 }
 
 /**
- * Emoji picker dialog with a curated grid of unicode emojis, grouped by
- * category, plus manual custom emoji support handled by the text field.
+ * Emoji picker dialog with two tabs:
+ *  - Discord: the custom emojis of every mutual guild of the logged user,
+ *    fetched live via [DiscordEmojiApi] (guilds -> emojis -> CDN images).
+ *    Picking one stores it as `<:name:id>` / `<a:name:id>`.
+ *  - Unicode: a curated grid of unicode emojis.
  */
 @Composable
 private fun EmojiPickerDialog(
+    token: String,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val categories = listOf(
+    val api = remember { DiscordEmojiApi() }
+    var selectedTab by remember { mutableIntStateOf(0) } // 0 = Discord, 1 = Unicode
+    var guildEmojis by remember { mutableStateOf<List<DiscordGuildEmojis>?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        val cleanToken = token.trim().replace("\"", "")
+        if (cleanToken.isBlank()) {
+            loadError = "Add your Discord token first to browse your server emojis."
+        } else {
+            loading = true
+            loadError = null
+            api.fetchGuildsWithEmojis(cleanToken)
+                .onSuccess { guildEmojis = it }
+                .onFailure { loadError = it.message ?: "Failed to load server emojis" }
+            loading = false
+        }
+    }
+
+    val unicodeCategories = listOf(
         "Music" to listOf(
             "🎵", "🎶", "🎼", "🎤", "🎧", "🎷",
             "🎸", "🥁", "🎹", "🎺", "🎻", "🪩"
@@ -570,37 +602,128 @@ private fun EmojiPickerDialog(
         title = { Text("Pick an emoji", fontWeight = FontWeight.Bold) },
         text = {
             Column {
-                categories.forEach { (label, emojis) ->
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
+                TabRow(selectedTabIndex = selectedTab) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = { Text("Discord") }
                     )
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(6),
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = { Text("Unicode") }
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
+                when {
+                    selectedTab == 1 -> Column(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        unicodeCategories.forEach { (label, emojis) ->
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
+                            )
+                            emojis.chunked(6).forEach { rowEmojis ->
+                                Row {
+                                    rowEmojis.forEach { emoji ->
+                                        Text(
+                                            emoji,
+                                            fontSize = 24.sp,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onPick(emoji) }
+                                                .padding(6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    loading -> Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(88.dp)
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) { CircularProgressIndicator() }
+
+                    loadError != null -> Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        items(emojis) { emoji ->
-                            Text(
-                                emoji,
-                                fontSize = 24.sp,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .clickable { onPick(emoji) }
-                                    .padding(6.dp)
-                            )
+                        Text(
+                            loadError ?: "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    guildEmojis?.isEmpty() == true -> Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("No server emojis found") }
+
+                    else -> Column(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        (guildEmojis ?: emptyList()).forEach { group ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                DiscordEmojiApi.guildIconUrl(group.guild)?.let { iconUrl ->
+                                    AsyncImage(
+                                        model = iconUrl,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+                                Text(
+                                    group.guild.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "(${group.emojis.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            group.emojis.chunked(6).forEach { rowEmojis ->
+                                Row {
+                                    rowEmojis.forEach { emoji ->
+                                        AsyncImage(
+                                            model = DiscordEmojiApi.emojiCdnUrl(emoji),
+                                            contentDescription = ":${emoji.name}:",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier
+                                                .clickable { onPick(DiscordEmojiApi.toCustomEmojiFormat(emoji)) }
+                                                .size(34.dp)
+                                                .padding(2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
                         }
                     }
                 }
-                Text(
-                    "Tip: Discord custom emojis (<:name:id>) can be pasted into the text field.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
             }
         },
         confirmButton = {
