@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">LyricsStatus</string>
+    <string name="notification_channel_name">Lyrics Live Sync</string>
+    <string name="notification_channel_desc">Shows currently playing music and synchronized lyrics in real time</string>
+    <string name="service_running">Lyrics sync active in background</string>
+    <string name="no_track_playing">No music playing</string>
+    <string name="waiting_for_playback">Play music on Spotify, Apple Music, or YT Music…</string>
+    <string name="no_lyrics_found">No synchronized lyrics available</string>
+    <string name="now_playing">Now Playing</string>
+    <string name="ai_settings">AI Settings</string>
+    <string name="custom_lyrics">Custom Lyrics</string>
+    <string name="settings">Settings</string>
+    <string name="enable_translation">Enable AI Translation</string>
+    <string name="target_language">Target Language</string>
+    <string name="api_key">API Key</string>
+    <string name="model_name">AI Model ID</string>
+    <string name="mode_auto">Auto Sync</string>
+    <string name="mode_android">Android Player</string>
+    <string name="mode_discord">Discord RPC</string>
+    <string name="token_manager">Discord &amp; Token Manager</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="edit">Edit</string>
+</resources>

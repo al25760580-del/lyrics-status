@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">LyricsStatus</string>
+    <string name="notification_channel_name">Sincronización de Letras en Vivo</string>
+    <string name="notification_channel_desc">Muestra la música en reproducción y letras sincronizadas en tiempo real</string>
+    <string name="service_running">Sincronización de letras activa en segundo plano</string>
+    <string name="no_track_playing">Sin música en reproducción</string>
+    <string name="waiting_for_playback">Reproduce música en Spotify, Apple Music o YT Music…</string>
+    <string name="no_lyrics_found">No hay letras sincronizadas disponibles</string>
+    <string name="now_playing">En Reproducción</string>
+    <string name="ai_settings">Ajustes de IA</string>
+    <string name="custom_lyrics">Letras Personalizadas</string>
+    <string name="settings">Ajustes</string>
+    <string name="enable_translation">Activar Traducción por IA</string>
+    <string name="target_language">Idioma de Destino</string>
+    <string name="api_key">Clave de API (API Key)</string>
+    <string name="model_name">ID de Modelo de IA</string>
+    <string name="mode_auto">Sincronización Automática</string>
+    <string name="mode_android">Reproductor Android</string>
+    <string name="mode_discord">Discord Rich Presence</string>
+    <string name="token_manager">Gestor de Discord y Token</string>
+    <string name="save">Guardar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="delete">Eliminar</string>
+    <string name="edit">Editar</string>
+</resources>
