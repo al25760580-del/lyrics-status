@@ -215,7 +215,7 @@ class DiscordStatusPusher(
             line.textTranslated!!
         } else {
             line.text
-        }.replace('♪', '🎶')
+        }.replace("♪", "🎶")
 
         val engineLine = LyricLine(
             timestampMs = line.time,
