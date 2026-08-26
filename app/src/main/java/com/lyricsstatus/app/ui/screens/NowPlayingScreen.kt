@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sync
@@ -133,7 +134,8 @@ fun NowPlayingScreen(
                 onSeek = { viewModel.seekTo(it) },
                 onToggleTranslation = { viewModel.toggleTranslation() },
                 onAdjustOffset = { viewModel.adjustOffset(it) },
-                onToggleDemo = { showDemoPicker = !showDemoPicker }
+                onToggleDemo = { showDemoPicker = !showDemoPicker },
+                onResync = { viewModel.refreshLyrics() }
             )
         }
     ) { paddingValues ->
@@ -364,7 +366,8 @@ fun BottomPlayerControls(
     onSeek: (Long) -> Unit,
     onToggleTranslation: () -> Unit,
     onAdjustOffset: (Long) -> Unit,
-    onToggleDemo: () -> Unit
+    onToggleDemo: () -> Unit,
+    onResync: () -> Unit = {}
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -453,13 +456,20 @@ fun BottomPlayerControls(
                     }
                 }
 
-                // AI translate & Demo toggles
+                // AI translate, resync & Demo toggles
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onToggleTranslation) {
                         Icon(
                             imageVector = Icons.Rounded.Translate,
                             contentDescription = "Toggle Translation",
                             tint = if (settings.enableTranslation) MaterialTheme.colorScheme.secondary else LyricsInactive
+                        )
+                    }
+                    IconButton(onClick = onResync) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Resync lyrics",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                     IconButton(onClick = onToggleDemo) {

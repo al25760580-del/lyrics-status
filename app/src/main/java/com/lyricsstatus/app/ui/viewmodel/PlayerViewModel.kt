@@ -60,7 +60,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         if (state.hasTrack) {
             viewModelScope.launch {
                 lyricsRepo.invalidateCache(state.songName, state.songAuthor)
-                PlaybackStateManager.triggerLyricsFetch(state.songName, state.songAuthor, forceRefresh = true)
+                PlaybackStateManager.resyncLyrics()
             }
         }
     }

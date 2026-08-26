@@ -89,6 +89,7 @@ fun GeneralSettingsScreen(
     val settings by settingsRepo.settingsFlow.collectAsState(initial = com.lyricsstatus.app.data.model.AppSettings())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    var showResetDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -345,6 +346,66 @@ fun GeneralSettingsScreen(
                 }
             }
 
+            // Reset to factory defaults
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Security, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Reset & Maintenance",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Restore every setting to its default value (offsets, translation, Discord config, templates and token will be cleared).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { showResetDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reset all settings to defaults")
+                    }
+                }
+            }
+
+            if (showResetDialog) {
+                AlertDialog(
+                    onDismissRequest = { showResetDialog = false },
+                    title = { Text("Reset settings?", fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text(
+                            "All settings will return to their default values. This also clears your Discord token and custom template. Lyrics and translation caches are kept."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    settingsRepo.updateSettings { com.lyricsstatus.app.data.model.AppSettings() }
+                                }
+                                showResetDialog = false
+                            }
+                        ) { Text("Reset", color = MaterialTheme.colorScheme.error) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showResetDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
@@ -361,7 +422,8 @@ private fun DiscordStatusCustomizationSection(
     onUpdate: (transform: (AppSettings) -> AppSettings) -> Unit
 ) {
     val emojiInput = settings.discordCustomEmoji
-    val parsedEmoji = DiscordStatusPusher.parseEmoji(emojiInput)
+    // remember: evita re-parsear el emoji y la plantilla en cada recomposición
+    val parsedEmoji = remember(emojiInput) { DiscordStatusPusher.parseEmoji(emojiInput) }
     val emojiLooksInvalid = emojiInput.trim().startsWith("<") && parsedEmoji?.id == null
     var showEmojiPicker by remember { mutableStateOf(false) }
 
@@ -375,9 +437,11 @@ private fun DiscordStatusCustomizationSection(
         album = "A Night at the Opera",
         durationMs = 354000L
     )
-    val preview = DiscordStatusPusher.formatStatusText(
-        settings.discordStatusTemplate, previewLine, previewTrack
-    )
+    val preview = remember(settings.discordStatusTemplate) {
+        DiscordStatusPusher.formatStatusText(
+            settings.discordStatusTemplate, previewLine, previewTrack
+        )
+    }
 
     val quickTokens = listOf(
         "{lyrics}", "{lyrics:uppercase}", "{lyrics:lowercase}",

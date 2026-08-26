@@ -32,7 +32,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lyricsstatus.app.data.model.LyricsLine
 import com.lyricsstatus.app.data.model.SongLyrics
 import com.lyricsstatus.app.ui.theme.LyricsInactive
 import com.lyricsstatus.app.ui.theme.LyricsTranslatedGlow
@@ -93,10 +92,14 @@ fun LyricsDisplay(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 100.dp, bottom = 140.dp, start = 20.dp, end = 20.dp)
     ) {
-        itemsIndexed(lyrics.lines) { index, line ->
+        itemsIndexed(lyrics.lines, key = { index, line -> "$index-${line.time}" }) { index, line ->
             val isActive = index == activeLineIndex
+            // Primitive/stable params only: lets Compose skip recomposition
+            // of unchanged lines while the active line moves forward.
             LyricsLineItem(
-                line = line,
+                timeMs = line.time,
+                text = line.text,
+                textTranslated = line.textTranslated,
                 isActive = isActive,
                 enableTranslation = enableTranslation,
                 onClick = { onLineClick(line.time) }
@@ -107,7 +110,9 @@ fun LyricsDisplay(
 
 @Composable
 fun LyricsLineItem(
-    line: LyricsLine,
+    timeMs: Long,
+    text: String,
+    textTranslated: String?,
     isActive: Boolean,
     enableTranslation: Boolean,
     onClick: () -> Unit
@@ -150,7 +155,7 @@ fun LyricsLineItem(
         ) {
             // Main lyric line
             Text(
-                text = line.text,
+                text = text,
                 style = if (isActive) {
                     MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Bold,
@@ -168,10 +173,10 @@ fun LyricsLineItem(
             )
 
             // AI Translated line underneath (if enabled and available)
-            if (enableTranslation && !line.textTranslated.isNullOrBlank()) {
+            if (enableTranslation && !textTranslated.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = line.textTranslated ?: "",
+                    text = textTranslated ?: "",
                     style = if (isActive) {
                         MaterialTheme.typography.bodyLarge.copy(
                             fontWeight = FontWeight.SemiBold,

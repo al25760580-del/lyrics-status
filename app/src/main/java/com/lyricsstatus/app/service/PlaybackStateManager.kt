@@ -23,6 +23,16 @@ import kotlinx.coroutines.launch
 
 object PlaybackStateManager {
 
+    /** UI tick precision for lyrics sync (does not drive recomposition). */
+    private const val TICK_INTERVAL_MS = 25L
+
+    /**
+     * Throttle for progress-only state emissions. The UI recomposes on line
+     * changes immediately, but progress-only updates are capped at 2 Hz to
+     * keep rendering cheap.
+     */
+    private const val PROGRESS_EMISSION_INTERVAL_MS = 500L
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _playbackState = MutableStateFlow(PlaybackState())
@@ -137,6 +147,13 @@ object PlaybackStateManager {
         tickerJob?.cancel()
         tickerJob = scope.launch {
             lastTickTime = System.currentTimeMillis()
+            // Deltas not yet flushed into the emitted state. The state stays
+            // the single source of truth; we only emit when the active line
+            // changes or PROGRESS_EMISSION_INTERVAL_MS elapses, instead of
+            // recomposing the whole UI 40 times per second.
+            var unemittedDeltaMs = 0L
+            var lastEmitTime = 0L
+
             while (true) {
                 val now = System.currentTimeMillis()
                 val delta = now - lastTickTime
@@ -144,7 +161,8 @@ object PlaybackStateManager {
 
                 val current = _playbackState.value
                 if (current.isPlaying && !current.isEnded) {
-                    val newProgress = current.songProgress + delta
+                    unemittedDeltaMs += delta
+                    val progressNow = current.songProgress + unemittedDeltaMs
                     val lyrics = current.lyrics
                     val config = _settings.value
 
@@ -158,8 +176,8 @@ object PlaybackStateManager {
                     var activeIndex = -1
 
                     if (lyrics != null && lyrics.isNotEmpty) {
-                        activeLine = lyrics.findActiveLine(newProgress, dynamicOffset)
-                        activeIndex = lyrics.findActiveIndex(newProgress, dynamicOffset)
+                        activeLine = lyrics.findActiveLine(progressNow, dynamicOffset)
+                        activeIndex = lyrics.findActiveIndex(progressNow, dynamicOffset)
 
                         // Push active lyric line to Discord custom status
                         if (activeLine != null && activeLine.time != lastPushedLineTime && config.discordEnabled) {
@@ -170,23 +188,59 @@ object PlaybackStateManager {
                         }
                     }
 
-                    _playbackState.update {
-                        it.copy(
-                            songProgress = newProgress,
-                            currentLine = activeLine,
-                            currentLineIndex = activeIndex
-                        )
+                    val lineChanged = activeLine?.time != current.currentLine?.time ||
+                        activeIndex != current.currentLineIndex
+                    val emitIntervalElapsed = now - lastEmitTime >= PROGRESS_EMISSION_INTERVAL_MS
+
+                    if (lineChanged || emitIntervalElapsed) {
+                        _playbackState.update {
+                            it.copy(
+                                songProgress = progressNow.coerceAtLeast(0L),
+                                currentLine = activeLine,
+                                currentLineIndex = activeIndex
+                            )
+                        }
+                        unemittedDeltaMs = 0L
+                        lastEmitTime = now
                     }
-                } else if (current.isEnded && lastPushedLineTime != -1L) {
-                    lastPushedLineTime = -1L
-                    launch(Dispatchers.IO) {
-                        discordStatusPusher.clearStatus(_settings.value)
+                } else {
+                    unemittedDeltaMs = 0L
+                    if (current.isEnded && lastPushedLineTime != -1L) {
+                        lastPushedLineTime = -1L
+                        launch(Dispatchers.IO) {
+                            discordStatusPusher.clearStatus(_settings.value)
+                        }
                     }
                 }
 
-                delay(25) // ~40 FPS synchronization precision
+                delay(TICK_INTERVAL_MS) // ~40 FPS synchronization precision
             }
         }
+    }
+
+    /**
+     * Re-aligns the current lyrics with the detected source (Discord RPC
+     * progress when available) and force-refreshes the lyrics pipeline.
+     */
+    fun resyncLyrics() {
+        val current = _playbackState.value
+        if (!current.hasTrack) return
+
+        lastPushedLineTime = -1L
+        discordStatusPusher.reset()
+
+        // Re-align progress with the live Discord track if it matches
+        val discordTrack = discordGateway.currentTrack.value
+        if (discordTrack != null &&
+            discordTrack.title == current.songName &&
+            discordTrack.artist == current.songAuthor
+        ) {
+            applyDiscordTrack(discordTrack)
+        } else {
+            lastTickTime = System.currentTimeMillis()
+        }
+
+        triggerLyricsFetch(current.songName, current.songAuthor, forceRefresh = true)
     }
 
     fun updateMediaInfo(
