@@ -4,12 +4,10 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- LyricsStatus glyph: beamed eighth notes + lyric text lines,
-         centered inside the 66dp adaptive-icon safe zone -->
+    <!-- Monochrome (themed icon) layer: same glyph, single color -->
     <group
         android:translateX="4"
         android:translateY="2">
-        <!-- lyric lines (rounded strokes) -->
         <path
             android:fillColor="#00000000"
             android:strokeColor="#FFFFFF"
@@ -28,18 +26,15 @@
             android:strokeWidth="3.2"
             android:strokeLineCap="round"
             android:pathData="M32,52 h10" />
-        <!-- beam connecting both stems -->
         <path
             android:fillColor="#FFFFFF"
             android:pathData="M45,36 L71,31 L71,36.5 L45,41.5 Z" />
-        <!-- stems -->
         <path
             android:fillColor="#FFFFFF"
             android:pathData="M45,36 h4 v28.5 h-4 Z" />
         <path
             android:fillColor="#FFFFFF"
             android:pathData="M67,31 h4 v33.5 h-4 Z" />
-        <!-- note heads -->
         <path
             android:fillColor="#FFFFFF"
             android:pathData="M42,58 a6.5,6.5 0 1,0 0,13 a6.5,6.5 0 1,0 0,-13 Z" />

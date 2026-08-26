@@ -2,6 +2,7 @@ package com.lyricsstatus.app.ui.screens
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,16 +14,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.EmojiEmotions
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -43,13 +51,19 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.lyricsstatus.app.data.discord.DiscordStatusPusher
 import com.lyricsstatus.app.data.model.AppSettings
@@ -287,6 +301,7 @@ fun GeneralSettingsScreen(
 
                     if (settings.discordEnabled) {
                         Spacer(modifier = Modifier.height(10.dp))
+                        var tokenVisible by remember { mutableStateOf(false) }
                         OutlinedTextField(
                             value = settings.discordToken,
                             onValueChange = { value ->
@@ -296,6 +311,19 @@ fun GeneralSettingsScreen(
                             },
                             label = { Text("Discord User Token") },
                             singleLine = true,
+                            visualTransformation = if (tokenVisible) {
+                                androidx.compose.ui.text.input.VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation(mask = '•')
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { tokenVisible = !tokenVisible }) {
+                                    Icon(
+                                        imageVector = if (tokenVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                        contentDescription = if (tokenVisible) "Hide token" else "Show token"
+                                    )
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -328,6 +356,7 @@ private fun DiscordStatusCustomizationSection(
     val emojiInput = settings.discordCustomEmoji
     val parsedEmoji = DiscordStatusPusher.parseEmoji(emojiInput)
     val emojiLooksInvalid = emojiInput.trim().startsWith("<") && parsedEmoji?.id == null
+    var showEmojiPicker by remember { mutableStateOf(false) }
 
     val previewLine = LyricLine(
         timestampMs = 65000L,
@@ -358,6 +387,15 @@ private fun DiscordStatusCustomizationSection(
         label = { Text("Custom Status Emoji (optional)") },
         singleLine = true,
         isError = emojiLooksInvalid,
+        trailingIcon = {
+            IconButton(onClick = { showEmojiPicker = true }) {
+                Icon(
+                    Icons.Rounded.EmojiEmotions,
+                    contentDescription = "Pick emoji",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        },
         supportingText = {
             when {
                 emojiLooksInvalid -> Text(
@@ -491,4 +529,85 @@ private fun DiscordStatusCustomizationSection(
         Spacer(modifier = Modifier.width(4.dp))
         Text("Reset to default template")
     }
+
+    if (showEmojiPicker) {
+        EmojiPickerDialog(
+            onPick = { emoji ->
+                onUpdate { s -> s.copy(discordCustomEmoji = emoji) }
+                showEmojiPicker = false
+            },
+            onDismiss = { showEmojiPicker = false }
+        )
+    }
+}
+
+/**
+ * Emoji picker dialog with a curated grid of unicode emojis, grouped by
+ * category, plus manual custom emoji support handled by the text field.
+ */
+@Composable
+private fun EmojiPickerDialog(
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val categories = listOf(
+        "Music" to listOf(
+            "🎵", "🎶", "🎼", "🎤", "🎧", "🎷",
+            "🎸", "🥁", "🎹", "🎺", "🎻", "🪩"
+        ),
+        "Vibes" to listOf(
+            "✨", "💫", "⭐", "🌙", "🔥", "💜",
+            "💙", "💚", "❤️", "🌈", "⚡", "🦋"
+        ),
+        "Fun" to listOf(
+            "😎", "🥳", "😭", "🤯", "🫡", "🤠",
+            "👀", "💯", "🌀", "💤", "🌸", "🫶"
+        )
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pick an emoji", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                categories.forEach { (label, emojis) ->
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
+                    )
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(6),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(88.dp)
+                    ) {
+                        items(emojis) { emoji ->
+                            Text(
+                                emoji,
+                                fontSize = 24.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .clickable { onPick(emoji) }
+                                    .padding(6.dp)
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Tip: Discord custom emojis (<:name:id>) can be pasted into the text field.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        dismissButton = {
+            TextButton(onClick = { onPick("") }) { Text("Remove emoji") }
+        }
+    )
 }
