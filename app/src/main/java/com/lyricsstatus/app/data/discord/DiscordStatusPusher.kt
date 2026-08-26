@@ -249,7 +249,9 @@ class DiscordStatusPusher(
 
     companion object {
         const val DISCORD_SETTINGS_API = "https://discord.com/api/v9/users/@me/settings"
-        private const val MAX_STATUS_LENGTH = 128
+
+        /** Discord hard limit for custom status text. */
+        const val MAX_STATUS_LENGTH = 128
         private const val MAX_CROPPED_LENGTH = 40
         private const val TAG = "DiscordStatusPusher"
 
