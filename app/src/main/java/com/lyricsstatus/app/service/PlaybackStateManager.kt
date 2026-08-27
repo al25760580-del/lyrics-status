@@ -3,6 +3,7 @@ package com.lyricsstatus.app.service
 import com.lyricsstatus.app.data.discord.DiscordGatewayPresence
 import com.lyricsstatus.app.data.discord.DiscordPresenceTrack
 import com.lyricsstatus.app.data.discord.DiscordStatusPusher
+import com.lyricsstatus.app.data.discord.SpotifyPlayerPoller
 import com.lyricsstatus.app.data.model.AppSettings
 import com.lyricsstatus.app.data.model.LyricsLine
 import com.lyricsstatus.app.data.model.PlaybackState
@@ -18,9 +19,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
 object PlaybackStateManager {
 
     /** UI tick precision for lyrics sync (does not drive recomposition). */
@@ -43,6 +44,12 @@ object PlaybackStateManager {
 
     val discordGateway = DiscordGatewayPresence()
     val discordStatusPusher = DiscordStatusPusher()
+
+    /**
+     * Spotify player poller (Rust parity): reliable song-change detection by
+     * track id + real progress, independent from gateway presence events.
+     */
+    val spotifyPoller = SpotifyPlayerPoller()
 
     private var lyricsRepository: LyricsRepository? = null
     private var settingsRepository: SettingsRepository? = null
@@ -71,9 +78,11 @@ object PlaybackStateManager {
                 if (shouldRunDiscord) {
                     if (oldSettings.discordToken != newSettings.discordToken || oldSettings.musicDetectionMode != newSettings.musicDetectionMode) {
                         discordGateway.connect(newSettings.discordToken)
+                        spotifyPoller.start(newSettings.discordToken)
                     }
                 } else {
                     discordGateway.disconnect()
+                    spotifyPoller.stop()
                 }
 
                 // If translation settings changed mid-song, re-fetch/translate
@@ -97,7 +106,14 @@ object PlaybackStateManager {
     private fun observeDiscordPresence() {
         discordObserverJob?.cancel()
         discordObserverJob = scope.launch {
-            discordGateway.currentTrack.collectLatest { discordTrack ->
+            // Spotify poller wins when a Spotify connection exists (accurate
+            // progress_ms + track id); gateway covers other Rich Presence apps.
+            val mergedTracks = combine(
+                discordGateway.currentTrack,
+                spotifyPoller.track
+            ) { gatewayTrack, spotifyTrack -> spotifyTrack ?: gatewayTrack }
+
+            mergedTracks.collectLatest { discordTrack ->
                 val mode = _settings.value.musicDetectionMode
                 if (discordTrack != null) {
                     val allowDiscord = when (mode) {
@@ -341,6 +357,16 @@ object PlaybackStateManager {
 
             val repo = lyricsRepository ?: return@launch
             val result = repo.fetchLyrics(songName, songAuthor, _settings.value)
+
+            // Still-current guard (parity with the Rust reference): a slow or
+            // cancelled fetch for a previous song must never overwrite the
+            // state of the song that is playing right now. OkHttp calls are
+            // not cancellable mid-flight, so the coroutine may reach this
+            // point even after cancel().
+            val fresh = _playbackState.value
+            if (!isActive || fresh.songName != songName || fresh.songAuthor != songAuthor) {
+                return@launch
+            }
 
             if (result != null) {
                 val (lyrics, sourceLabel) = result
