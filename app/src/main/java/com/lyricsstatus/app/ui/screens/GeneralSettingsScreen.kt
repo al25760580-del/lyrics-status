@@ -26,10 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EmojiEmotions
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Visibility
@@ -634,6 +636,7 @@ private fun EmojiPickerDialog(
 ) {
     val api = remember { DiscordEmojiApi() }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Discord, 1 = Unicode
+    var searchQuery by remember { mutableStateOf("") }
     val guildGroups = remember { mutableStateListOf<DiscordGuildEmojis>() }
     var fetching by remember { mutableStateOf(false) }
     var fetchDone by remember { mutableStateOf(false) }
@@ -670,18 +673,24 @@ private fun EmojiPickerDialog(
         }
     }
 
+    // char to searchable name
     val unicodeCategories = listOf(
         "Music" to listOf(
-            "🎵", "🎶", "🎼", "🎤", "🎧", "🎷",
-            "🎸", "🥁", "🎹", "🎺", "🎻", "🪩"
+            "🎵" to "music note", "🎶" to "musical notes", "🎼" to "musical score",
+            "🎤" to "microphone", "🎧" to "headphones", "🎷" to "saxophone",
+            "🎸" to "guitar", "🥁" to "drum", "🎹" to "piano",
+            "🎺" to "trumpet", "🎻" to "violin", "🪩" to "mirror ball"
         ),
         "Vibes" to listOf(
-            "✨", "💫", "⭐", "🌙", "🔥", "💜",
-            "💙", "💚", "❤️", "🌈", "⚡", "🦋"
+            "✨" to "sparkles", "💫" to "dizzy", "⭐" to "star", "🌙" to "moon",
+            "🔥" to "fire", "💜" to "purple heart", "💙" to "blue heart",
+            "💚" to "green heart", "❤️" to "red heart", "🌈" to "rainbow",
+            "⚡" to "lightning", "🦋" to "butterfly"
         ),
         "Fun" to listOf(
-            "😎", "🥳", "😭", "🤯", "🫡", "🤠",
-            "👀", "💯", "🌀", "💤", "🌸", "🫶"
+            "😎" to "sunglasses", "🥳" to "party", "😭" to "crying", "🤯" to "exploding head",
+            "🫡" to "salute", "🤠" to "cowboy", "👀" to "eyes", "💯" to "hundred",
+            "🌀" to "cyclone", "💤" to "zzz sleep", "🌸" to "cherry blossom", "🫶" to "heart hands"
         )
     )
 
@@ -704,31 +713,100 @@ private fun EmojiPickerDialog(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Emoji search: filters the active tab
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    singleLine = true,
+                    placeholder = { Text("Search emojis…") },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Rounded.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(
+                                    Icons.Rounded.Close,
+                                    contentDescription = "Clear search",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val query = searchQuery.trim().lowercase()
+                val filteredGroups = if (query.isBlank()) {
+                    guildGroups.toList()
+                } else {
+                    guildGroups.mapNotNull { group ->
+                        if (group.guild.name.lowercase().contains(query)) {
+                            // Server name matches: show all of its emojis
+                            group
+                        } else {
+                            group.copy(
+                                emojis = group.emojis.filter {
+                                    it.name.lowercase().contains(query)
+                                }
+                            ).takeIf { it.emojis.isNotEmpty() }
+                        }
+                    }
+                }
+
                 when {
-                    selectedTab == 1 -> Column(
-                        modifier = Modifier
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        unicodeCategories.forEach { (label, emojis) ->
-                            Text(
-                                label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
-                            )
-                            emojis.chunked(6).forEach { rowEmojis ->
-                                Row {
-                                    rowEmojis.forEach { emoji ->
-                                        Text(
-                                            emoji,
-                                            fontSize = 24.sp,
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clickable { onPick(emoji) }
-                                                .padding(6.dp)
-                                        )
+                    selectedTab == 1 -> {
+                        val filteredCategories = if (query.isBlank()) {
+                            unicodeCategories
+                        } else {
+                            unicodeCategories.mapNotNull { (label, emojis) ->
+                                val matches = emojis.filter { (_, name) ->
+                                    name.contains(query)
+                                }
+                                if (matches.isEmpty()) null else label to matches
+                            }
+                        }
+                        if (filteredCategories.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(200.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("No emojis match \"${searchQuery.trim()}\"", textAlign = TextAlign.Center)
+                            }
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .heightIn(max = 320.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                filteredCategories.forEach { (label, emojis) ->
+                                    Text(
+                                        label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
+                                    )
+                                    emojis.chunked(6).forEach { rowEmojis ->
+                                        Row {
+                                            rowEmojis.forEach { (char, _) ->
+                                                Text(
+                                                    char,
+                                                    fontSize = 24.sp,
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .clickable { onPick(char) }
+                                                        .padding(6.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -757,6 +835,15 @@ private fun EmojiPickerDialog(
                         )
                     }
 
+                    query.isNotBlank() && filteredGroups.isEmpty() -> Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("No emojis match \"${searchQuery.trim()}\"", textAlign = TextAlign.Center)
+                    }
+
                     fetchDone && guildGroups.isEmpty() -> Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -771,7 +858,7 @@ private fun EmojiPickerDialog(
                             .heightIn(max = 320.dp),
                         contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
-                        guildGroups.forEach { group ->
+                        filteredGroups.forEach { group ->
                             item(
                                 span = { GridItemSpan(maxLineSpan) },
                                 key = "guild-${group.guild.id}"
