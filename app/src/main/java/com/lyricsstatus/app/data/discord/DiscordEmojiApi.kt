@@ -1,6 +1,11 @@
 package com.lyricsstatus.app.data.discord
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -53,8 +58,24 @@ class DiscordEmojiApi(
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
+        /** Concurrent guild-emoji requests (keeps first paint fast without flooding). */
+        private const val PARALLEL_GUILD_FETCHES = 6
+
         /** Safety cap for guild pagination. */
         const val MAX_GUILDS = 200
+
+        /** In-memory picker cache so reopening the dialog is instant. */
+        const val PICKER_CACHE_TTL_MS = 5 * 60 * 1000L
+        private var cachedGuildEmojis: List<DiscordGuildEmojis>? = null
+        private var cachedAtMs: Long = 0L
+
+        fun peekCachedGuildEmojis(): List<DiscordGuildEmojis>? =
+            cachedGuildEmojis?.takeIf { System.currentTimeMillis() - cachedAtMs < PICKER_CACHE_TTL_MS }
+
+        fun storeGuildEmojisCache(list: List<DiscordGuildEmojis>) {
+            cachedGuildEmojis = list
+            cachedAtMs = System.currentTimeMillis()
+        }
 
         /** CDN url for an emoji image (gif for animated ones). */
         fun emojiCdnUrl(emoji: DiscordGuildEmoji): String =
@@ -126,25 +147,37 @@ class DiscordEmojiApi(
         }
 
     /**
-     * Convenience for the picker: every mutual guild that has at least one
-     * usable (available, non-managed, named) emoji.
+     * Progressive picker loading: invokes [onGuildEmojis] as each guild with
+     * emojis resolves (fetched in parallel, bounded by a semaphore), so the
+     * UI can render results incrementally instead of blocking until every
+     * guild is done. Composing images lazily + progressively avoids the
+     * first-open render spike.
      */
-    suspend fun fetchGuildsWithEmojis(token: String): Result<List<DiscordGuildEmojis>> {
+    suspend fun fetchGuildsWithEmojisProgressive(
+        token: String,
+        onGuildEmojis: (DiscordGuildEmojis) -> Unit
+    ): Result<Unit> {
         val guilds = fetchGuilds(token).getOrElse { return Result.failure(it) }
-        val result = mutableListOf<DiscordGuildEmojis>()
-        for (guild in guilds) {
-            val emojis = fetchGuildEmojis(token, guild.id).getOrNull()
-                ?.filter { it.available && !it.managed && it.name.isNotBlank() }
-                .orEmpty()
-            if (emojis.isNotEmpty()) {
-                result.add(
-                    DiscordGuildEmojis(
-                        guild = guild,
-                        emojis = emojis.sortedBy { it.name.lowercase() }
-                    )
-                )
-            }
+        coroutineScope {
+            val semaphore = Semaphore(PARALLEL_GUILD_FETCHES)
+            guilds.map { guild ->
+                launch {
+                    semaphore.withPermit {
+                        val emojis = fetchGuildEmojis(token, guild.id).getOrNull()
+                            ?.filter { it.available && !it.managed && it.name.isNotBlank() }
+                            .orEmpty()
+                        if (emojis.isNotEmpty()) {
+                            onGuildEmojis(
+                                DiscordGuildEmojis(
+                                    guild = guild,
+                                    emojis = emojis.sortedBy { it.name.lowercase() }
+                                )
+                            )
+                        }
+                    }
+                }
+            }.joinAll()
         }
-        return Result.success(result)
+        return Result.success(Unit)
     }
 }

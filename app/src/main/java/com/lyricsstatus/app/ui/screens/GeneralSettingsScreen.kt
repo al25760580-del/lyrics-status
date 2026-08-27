@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,6 +17,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -55,6 +60,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -628,21 +634,39 @@ private fun EmojiPickerDialog(
 ) {
     val api = remember { DiscordEmojiApi() }
     var selectedTab by remember { mutableIntStateOf(0) } // 0 = Discord, 1 = Unicode
-    var guildEmojis by remember { mutableStateOf<List<DiscordGuildEmojis>?>(null) }
-    var loading by remember { mutableStateOf(false) }
+    val guildGroups = remember { mutableStateListOf<DiscordGuildEmojis>() }
+    var fetching by remember { mutableStateOf(false) }
+    var fetchDone by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        // Instant open from the in-memory cache (5 min TTL): zero network,
+        // zero re-render spike.
+        DiscordEmojiApi.peekCachedGuildEmojis()?.let { cached ->
+            guildGroups.addAll(cached)
+            fetchDone = true
+            return@LaunchedEffect
+        }
         val cleanToken = token.trim().replace("\"", "")
         if (cleanToken.isBlank()) {
             loadError = "Add your Discord token first to browse your server emojis."
+            fetchDone = true
         } else {
-            loading = true
+            fetching = true
             loadError = null
-            api.fetchGuildsWithEmojis(cleanToken)
-                .onSuccess { guildEmojis = it }
-                .onFailure { loadError = it.message ?: "Failed to load server emojis" }
-            loading = false
+            // Progressive: each guild renders as soon as it arrives
+            api.fetchGuildsWithEmojisProgressive(cleanToken) { group ->
+                guildGroups.add(group)
+            }.onFailure { e ->
+                if (guildGroups.isEmpty()) {
+                    loadError = e.message ?: "Failed to load server emojis"
+                }
+            }
+            fetching = false
+            fetchDone = true
+            if (guildGroups.isNotEmpty()) {
+                DiscordEmojiApi.storeGuildEmojisCache(guildGroups.toList())
+            }
         }
     }
 
@@ -711,14 +735,14 @@ private fun EmojiPickerDialog(
                         }
                     }
 
-                    loading -> Box(
+                    fetching && guildGroups.isEmpty() -> Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(200.dp),
                         contentAlignment = Alignment.Center
                     ) { CircularProgressIndicator() }
 
-                    loadError != null -> Column(
+                    loadError != null && guildGroups.isEmpty() -> Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(200.dp),
@@ -733,58 +757,90 @@ private fun EmojiPickerDialog(
                         )
                     }
 
-                    guildEmojis?.isEmpty() == true -> Box(
+                    fetchDone && guildGroups.isEmpty() -> Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(200.dp),
                         contentAlignment = Alignment.Center
                     ) { Text("No server emojis found") }
 
-                    else -> Column(
+                    else -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(6),
                         modifier = Modifier
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState())
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
-                        (guildEmojis ?: emptyList()).forEach { group ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                DiscordEmojiApi.guildIconUrl(group.guild)?.let { iconUrl ->
-                                    AsyncImage(
-                                        model = iconUrl,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+                        guildGroups.forEach { group ->
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "guild-${group.guild.id}"
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                ) {
+                                    DiscordEmojiApi.guildIconUrl(group.guild)?.let { iconUrl ->
+                                        AsyncImage(
+                                            model = iconUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        group.guild.name,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                }
-                                Text(
-                                    group.guild.name,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    "(${group.emojis.size})",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            group.emojis.chunked(6).forEach { rowEmojis ->
-                                Row {
-                                    rowEmojis.forEach { emoji ->
-                                        AsyncImage(
-                                            model = DiscordEmojiApi.emojiCdnUrl(emoji),
-                                            contentDescription = ":${emoji.name}:",
-                                            contentScale = ContentScale.Fit,
-                                            modifier = Modifier
-                                                .clickable { onPick(DiscordEmojiApi.toCustomEmojiFormat(emoji)) }
-                                                .size(34.dp)
-                                                .padding(2.dp)
-                                        )
-                                    }
+                                    Text(
+                                        "(${group.emojis.size})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
-                            Spacer(modifier = Modifier.height(10.dp))
+                            items(
+                                group.emojis,
+                                key = { "e-${group.guild.id}-${it.id}" }
+                            ) { emoji ->
+                                AsyncImage(
+                                    model = DiscordEmojiApi.emojiCdnUrl(emoji),
+                                    contentDescription = ":${emoji.name}:",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .clickable { onPick(DiscordEmojiApi.toCustomEmojiFormat(emoji)) }
+                                        .size(34.dp)
+                                        .padding(2.dp)
+                                )
+                            }
+                        }
+                        if (fetching) {
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "loading-more"
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        "Loading more servers…",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }
