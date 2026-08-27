@@ -70,6 +70,9 @@ object PlaybackStateManager {
     private var isAndroidPlayingLocally = false
     private var lastPushedLineTime = -1L
 
+    /** Songs we already attempted a lyrics fetch for (syncLyrics parity). */
+    private var lastFetchAttemptKey: String? = null
+
     fun initialize(lyricsRepo: LyricsRepository, settingsRepo: SettingsRepository) {
         this.lyricsRepository = lyricsRepo
         this.settingsRepository = settingsRepo
@@ -194,9 +197,19 @@ object PlaybackStateManager {
 
         lastTickTime = System.currentTimeMillis()
 
-        if (songChanged && track.title.isNotBlank()) {
-            lastPushedLineTime = -1L
-            discordStatusPusher.reset()
+        // syncLyrics parity with the reference TS: (re)fetch when the song
+        // changed OR when a previous fetch was interrupted/left the current
+        // song without lyrics (single attempt per song, no retry storm).
+        val fetchKey = "${track.title}|${track.artist}"
+        val lyricsMissing = _playbackState.value.lyrics == null &&
+            !_playbackState.value.isTranslating &&
+            lastFetchAttemptKey != fetchKey
+
+        if (track.title.isNotBlank() && (songChanged || lyricsMissing)) {
+            if (songChanged) {
+                lastPushedLineTime = -1L
+                discordStatusPusher.reset()
+            }
             triggerLyricsFetch(track.title, track.artist)
         }
     }
@@ -392,6 +405,7 @@ object PlaybackStateManager {
     }
 
     fun triggerLyricsFetch(songName: String, songAuthor: String, forceRefresh: Boolean = false) {
+        lastFetchAttemptKey = "$songName|$songAuthor"
         fetchJob?.cancel()
         fetchJob = scope.launch {
             _playbackState.update {

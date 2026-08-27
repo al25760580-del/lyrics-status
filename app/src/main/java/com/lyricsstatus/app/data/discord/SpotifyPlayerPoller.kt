@@ -53,6 +53,14 @@ class SpotifyPlayerPoller(
         private const val POLL_INTERVAL_MS = 2000L
         private const val NO_CONNECTION_RETRY_MS = 10_000L
 
+        /**
+         * While the player is idle (204 / no item) we keep emitting the last
+         * track as paused — like the reference TS (`isPlaying = false`,
+         * track kept). After this many idle polls (~30 s) we release it to
+         * null so other sources (gateway) or the ghost-stop can take over.
+         */
+        private const val INACTIVE_POLLS_BEFORE_RELEASE = 15
+
         /** Strips "(Remaster/Live/…)" decorations from track names, as Rust does. */
         private val TITLE_CLEANUP = Regex(" \\(.+\\)")
         private const val USER_AGENT =
@@ -64,6 +72,12 @@ class SpotifyPlayerPoller(
 
     @Volatile
     private var accessToken: String = ""
+
+    /** Last real track, used to emit a paused copy while the player is idle. */
+    @Volatile
+    private var lastRealTrack: DiscordPresenceTrack? = null
+    @Volatile
+    private var inactivePolls: Int = 0
 
     private val _track = MutableStateFlow<DiscordPresenceTrack?>(null)
     val track: StateFlow<DiscordPresenceTrack?> = _track.asStateFlow()
@@ -79,7 +93,24 @@ class SpotifyPlayerPoller(
         pollJob?.cancel()
         pollJob = null
         accessToken = ""
+        lastRealTrack = null
+        inactivePolls = 0
         _track.value = null
+    }
+
+    /**
+     * Player idle (204 / no item / error): like the reference TS, keep the
+     * last track but flagged as paused; after [INACTIVE_POLLS_BEFORE_RELEASE]
+     * idle polls, release to null so the gateway/ghost-stop can act.
+     */
+    private fun emitIdle() {
+        val paused = lastRealTrack
+        _track.value = if (paused != null && inactivePolls < INACTIVE_POLLS_BEFORE_RELEASE) {
+            paused.copy(isPlaying = false)
+        } else {
+            null
+        }
+        inactivePolls++
     }
 
     private suspend fun fetchAccessToken(discordToken: String): String? {
@@ -157,11 +188,18 @@ class SpotifyPlayerPoller(
 
                 response.use { res ->
                     when {
-                        res.code == 204 -> _track.value = null // nothing playing
-                        !res.isSuccessful -> _track.value = null
+                        res.code == 204 -> emitIdle()
+                        !res.isSuccessful -> emitIdle()
                         else -> {
                             val body = res.body?.string() ?: ""
-                            _track.value = parsePlayer(body, started)
+                            val parsed = parsePlayer(body, started)
+                            if (parsed != null) {
+                                lastRealTrack = parsed
+                                inactivePolls = 0
+                                _track.value = parsed
+                            } else {
+                                emitIdle()
+                            }
                         }
                     }
                 }
