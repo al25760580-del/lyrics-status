@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -120,7 +121,9 @@ class SpotifyPlayerPoller(
         }
 
     private suspend fun pollLoop(discordToken: String) {
-        while (isActive) {
+        // Plain suspend fun (no CoroutineScope receiver): check the current
+        // coroutine's context for cancellation.
+        while (currentCoroutineContext().isActive) {
             try {
                 if (accessToken.isBlank()) {
                     val token = fetchAccessToken(discordToken)
