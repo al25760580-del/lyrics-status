@@ -35,6 +35,10 @@ object PlaybackStateManager {
      */
     private const val PROGRESS_EMISSION_INTERVAL_MS = 500L
 
+    /** Normalization helpers for song-change comparison. */
+    private val PARENTHESIZED_SUFFIX = Regex("\\s*\\([^)]*\\)")
+    private val WHITESPACE_RUN = Regex("\\s+")
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _playbackState = MutableStateFlow(PlaybackState())
@@ -107,12 +111,17 @@ object PlaybackStateManager {
     private fun observeDiscordPresence() {
         discordObserverJob?.cancel()
         discordObserverJob = scope.launch {
-            // Spotify poller wins when a Spotify connection exists (accurate
-            // progress_ms + track id); gateway covers other Rich Presence apps.
+            // Single sticky source (Rust parity): when a Spotify connection
+            // works, ONLY the poller drives music detection — mixing it with
+            // the gateway flip-flops metadata and retriggers fetches. The
+            // gateway remains the source for other Rich Presence apps.
             val mergedTracks = combine(
                 discordGateway.currentTrack,
-                spotifyPoller.track
-            ) { gatewayTrack, spotifyTrack -> spotifyTrack ?: gatewayTrack }
+                spotifyPoller.track,
+                spotifyPoller.sourceActive
+            ) { gatewayTrack, spotifyTrack, spotifyActive ->
+                if (spotifyActive) spotifyTrack else gatewayTrack
+            }
 
             mergedTracks.collectLatest { discordTrack ->
                 val mode = _settings.value.musicDetectionMode
@@ -126,7 +135,9 @@ object PlaybackStateManager {
                     if (allowDiscord) {
                         applyDiscordTrack(discordTrack)
                     }
-                } else if (mode == "discord") {
+                } else if (_playbackState.value.activeProvider == "discord") {
+                    // The discord source stopped reporting music: stop the
+                    // ghost playback instead of leaving the last song forever.
                     _playbackState.update { it.copy(isPlaying = false) }
                     discordStatusPusher.clearStatus(_settings.value)
                 }
@@ -134,9 +145,17 @@ object PlaybackStateManager {
         }
     }
 
+    /** Normalized comparison so metadata cosmetics don't count as song changes. */
+    private fun comparable(input: String): String =
+        input.lowercase()
+            .replace(PARENTHESIZED_SUFFIX, "")
+            .replace(WHITESPACE_RUN, " ")
+            .trim()
+
     private fun applyDiscordTrack(track: DiscordPresenceTrack) {
         val current = _playbackState.value
-        val songChanged = current.songName != track.title || current.songAuthor != track.artist
+        val songChanged = comparable(current.songName) != comparable(track.title) ||
+            comparable(current.songAuthor) != comparable(track.artist)
 
         _playbackState.update {
             it.copy(
@@ -146,6 +165,7 @@ object PlaybackStateManager {
                 songDuration = track.durationMs,
                 songProgress = track.progressMs,
                 isPlaying = track.isPlaying,
+                activeProvider = "discord",
                 providerLabel = "Discord RPC (${track.appName})",
                 lyricsEpoch = if (songChanged) it.lyricsEpoch + 1 else it.lyricsEpoch
             )
@@ -246,18 +266,26 @@ object PlaybackStateManager {
         lastPushedLineTime = -1L
         discordStatusPusher.reset()
 
-        // Re-align progress with the live Discord track if it matches
-        val discordTrack = discordGateway.currentTrack.value
-        if (discordTrack != null &&
-            discordTrack.title == current.songName &&
-            discordTrack.artist == current.songAuthor
-        ) {
-            applyDiscordTrack(discordTrack)
+        // Prefer the active source: poller while a Spotify connection works,
+        // gateway otherwise (matches the merged flow in observeDiscordPresence)
+        val sourceTrack = if (spotifyPoller.sourceActive.value) {
+            spotifyPoller.track.value ?: discordGateway.currentTrack.value
+        } else {
+            discordGateway.currentTrack.value
+        }
+
+        if (sourceTrack != null) {
+            applyDiscordTrack(sourceTrack)
         } else {
             lastTickTime = System.currentTimeMillis()
         }
 
-        triggerLyricsFetch(current.songName, current.songAuthor, forceRefresh = true)
+        // Re-read AFTER applying: the track may have just changed and the
+        // fetch must target the song now playing, not the stale one.
+        val fresh = _playbackState.value
+        if (fresh.hasTrack) {
+            triggerLyricsFetch(fresh.songName, fresh.songAuthor, forceRefresh = true)
+        }
     }
 
     fun updateMediaInfo(
@@ -288,6 +316,7 @@ object PlaybackStateManager {
                 songDuration = durationMs,
                 songProgress = progressMs,
                 isPlaying = isPlaying,
+                activeProvider = "android",
                 providerLabel = providerLabel,
                 albumArtUrl = albumArtUrl ?: it.albumArtUrl,
                 lyricsEpoch = if (songChanged) it.lyricsEpoch + 1 else it.lyricsEpoch
