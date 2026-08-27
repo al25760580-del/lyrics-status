@@ -68,15 +68,6 @@ class SpotifyPlayerPoller(
     private val _track = MutableStateFlow<DiscordPresenceTrack?>(null)
     val track: StateFlow<DiscordPresenceTrack?> = _track.asStateFlow()
 
-    /**
-     * True while a working Spotify connection exists. When active, the
-     * poller is the ONLY music source (Rust parity): blending it with the
-     * gateway caused metadata flip-flops ("(Remaster)" / artist lists) that
-     * retriggered the lyrics fetch in a loop on every emission.
-     */
-    private val _sourceActive = MutableStateFlow(false)
-    val sourceActive: StateFlow<Boolean> = _sourceActive.asStateFlow()
-
     fun start(discordToken: String) {
         stop()
         val cleanToken = discordToken.trim().replace("\"", "")
@@ -88,7 +79,6 @@ class SpotifyPlayerPoller(
         pollJob?.cancel()
         pollJob = null
         accessToken = ""
-        _sourceActive.value = false
         _track.value = null
     }
 
@@ -140,12 +130,10 @@ class SpotifyPlayerPoller(
                     if (token == null) {
                         // No Spotify connection linked: retry gently (Rust keeps
                         // polling; we back off to avoid hammering the API).
-                        _sourceActive.value = false
                         _track.value = null
                         delay(NO_CONNECTION_RETRY_MS)
                         continue
                     }
-                    _sourceActive.value = true
                     accessToken = token
                 }
 
