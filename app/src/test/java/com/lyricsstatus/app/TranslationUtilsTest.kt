@@ -33,4 +33,37 @@ class TranslationUtilsTest {
         assertEquals(3, result.getOrNull()?.size)
         assertEquals("Hola mundo", result.getOrNull()?.get(0))
     }
+
+    @Test
+    fun testSystemPromptIsScriptAware() {
+        val prompt = TranslationUtils.buildSystemPrompt("es-MX")
+        assertTrue(prompt.contains("non-Latin script"))
+        assertTrue(prompt.contains("Japanese"))
+        assertTrue(prompt.contains("romanize"))
+        assertTrue(prompt.contains("Never merge or split lines"))
+    }
+
+    @Test
+    fun testParseAndValidateLinesTrimsOuterBlanks() {
+        val raw = "\n\n\nこんにちは\nさようなら\n\n"
+        val result = TranslationUtils.parseAndValidateLines(raw, 2)
+        assertTrue(result.isSuccess)
+        assertEquals(listOf("こんにちは", "さようなら"), result.getOrNull())
+    }
+
+    @Test
+    fun testParseAndValidateLinesDropsInnerBlanks() {
+        val raw = "Привет мир\n   \nДо свидания"
+        val result = TranslationUtils.parseAndValidateLines(raw, 2)
+        assertTrue(result.isSuccess)
+        assertEquals(listOf("Привет мир", "До свидания"), result.getOrNull())
+    }
+
+    @Test
+    fun testParseAndValidateLinesCyrillicExactCount() {
+        val raw = "Первый стих\nВторой стих\nТретий стих"
+        val result = TranslationUtils.parseAndValidateLines(raw, 3)
+        assertTrue(result.isSuccess)
+        assertEquals(3, result.getOrNull()?.size)
+    }
 }

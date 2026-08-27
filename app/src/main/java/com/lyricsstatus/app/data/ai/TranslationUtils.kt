@@ -4,13 +4,16 @@ object TranslationUtils {
 
     fun buildSystemPrompt(languageCode: String): String {
         val language = getLanguageDisplayName(languageCode)
-        return "You are an expert lyrics translator. Translate the song lyrics provided by the user into $language.\n" +
+        return "You are an expert lyrics translator. Translate the song lyrics provided by the user into $language, regardless of the source language or writing system.\n" +
                 "STRICT RULES:\n" +
-                "1. Return EXACTLY one translated output line for every input line, maintaining the same order.\n" +
-                "2. Translate as sung: natural, rhythmic, singable phrasing suited for music rather than a formal literal translation.\n" +
-                "3. Keep song titles, artist names, well-known brand names, and phonetic ad-libs (e.g., 'Oh', 'Yeah', 'Na na na') as-is when appropriate.\n" +
-                "4. NEVER add line numbering, timestamps, markdown headers, explanations, or extra commentary.\n" +
-                "5. Output ONLY the translated lyrics lines."
+                "1. Return EXACTLY one translated output line for every input line, maintaining the same order and the same total line count. Never merge or split lines.\n" +
+                "2. Automatically detect the source language, even when written in a non-Latin script (Japanese, Chinese, Korean, Cyrillic, Greek, Arabic, Hebrew, Hindi, Thai, etc.). Translate from ANY script.\n" +
+                "3. NEVER romanize and never transliterate: always write the translation in the native script of $language.\n" +
+                "4. Translate as sung: natural, rhythmic, singable phrasing suited for music rather than a formal literal translation.\n" +
+                "5. Keep song titles, artist names, well-known brand names, and phonetic ad-libs (e.g., 'Oh', 'Yeah', 'Na na na', 'ラララ') as-is when appropriate.\n" +
+                "6. If a line is already in $language, is an instrumental marker (♪, ♫, 🎶, ・, ---, ***), or contains only punctuation, keep it unchanged in the same position.\n" +
+                "7. NEVER add line numbering, timestamps, markdown headers, explanations, or extra commentary.\n" +
+                "8. Output ONLY the translated lyrics lines, with no blank lines in between."
     }
 
     fun getLanguageDisplayName(code: String): String {
@@ -63,18 +66,29 @@ object TranslationUtils {
         expectedCount: Int
     ): Result<List<String>> {
         val cleaned = stripCodeFences(rawOutput)
-        val lines = cleaned.lines().map { it.trim() }
+        // Models often add leading/trailing blank lines or filler around the
+        // lyrics: drop them before counting.
+        val content = cleaned.lines()
+            .dropWhile { it.isBlank() }
+            .dropLastWhile { it.isBlank() }
+        val lines = content.map { it.trim() }
 
-        if (lines.size != expectedCount) {
-            // If line count mismatch, try filtering empty trailing lines or aligning
-            if (lines.filter { it.isNotEmpty() }.size == expectedCount) {
-                return Result.success(lines.filter { it.isNotEmpty() })
-            }
-            return Result.failure(
-                IllegalStateException("AI line count mismatch: expected $expectedCount lines, received ${lines.size} lines")
-            )
+        if (lines.size == expectedCount) {
+            return Result.success(lines)
         }
 
-        return Result.success(lines)
+        // Inputs never contain blank lines, so any blank line inside the AI
+        // output is noise (common with non-Latin scripts): drop and retry.
+        val nonEmpty = lines.filter { it.isNotEmpty() }
+        if (nonEmpty.size == expectedCount) {
+            return Result.success(nonEmpty)
+        }
+
+        return Result.failure(
+            IllegalStateException(
+                "AI line count mismatch: expected $expectedCount lines, received ${lines.size}. " +
+                    "Try re-syncing the lyrics."
+            )
+        )
     }
 }

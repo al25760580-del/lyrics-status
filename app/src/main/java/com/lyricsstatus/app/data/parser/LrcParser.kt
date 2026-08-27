@@ -6,7 +6,9 @@ import java.util.regex.Pattern
 
 object LrcParser {
 
-    private val TIMESTAMP_PATTERN = Pattern.compile("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?]")
+    // Tolerates ASCII and full-width separators (CJK sources often use
+    // "：" instead of ":" and "．" instead of ".").
+    private val TIMESTAMP_PATTERN = Pattern.compile("\\[(\\d{1,3})[:：](\\d{2})(?:[.．:：](\\d{1,3}))?]")
     private val OFFSET_PATTERN = Pattern.compile("^\\[offset:\\s*([+-]?\\d+)\\]", Pattern.CASE_INSENSITIVE)
 
     /**

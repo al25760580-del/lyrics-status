@@ -212,7 +212,11 @@ class TranslationManager(
 
     private fun applyTranslations(lyrics: SongLyrics, translatedLines: List<String>) {
         lyrics.lines.zip(translatedLines).forEach { (line, translated) ->
-            line.textTranslated = translated
+            // Skip blank AI lines (e.g. instrumental markers echoed empty):
+            // keep the original line without a duplicated translation.
+            if (translated.isNotBlank()) {
+                line.textTranslated = translated
+            }
         }
     }
 

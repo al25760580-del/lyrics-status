@@ -70,4 +70,17 @@ class LrcParserTest {
         val activeAt12Sec = parsed.findActiveLine(12000L)
         assertEquals("Line C", activeAt12Sec?.text)
     }
+
+    @Test
+    fun testParseFullWidthTimestamps() {
+        // CJK sources (NetEase/QQ) often use full-width "：" and "．"
+        val lrc = "[00：01．20]テストライン\n[01:05.10]通常ライン"
+
+        val parsed = LrcParser.parse(lrc)
+        assertEquals(2, parsed.lines.size)
+        assertEquals(1200L, parsed.lines[0].time)
+        assertEquals("テストライン", parsed.lines[0].text)
+        assertEquals(65100L, parsed.lines[1].time)
+        assertEquals("通常ライン", parsed.lines[1].text)
+    }
 }
